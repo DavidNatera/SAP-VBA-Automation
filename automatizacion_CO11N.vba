@@ -117,10 +117,16 @@ Sub AccesoSAP_Optimizado()
     ' 2. Cargamos toda la tabla a la RAM
     arrDatos = Tbl_DATOS.DataBodyRange.Value
     
+    Dim huboErrorAnterior As Boolean
+    huboErrorAnterior = True ' Inicializamos en True para que abra la transacción en la primera vuelta
+
     ' === Ciclo de Notificación ===
     For i = LBound(arrDatos, 1) To UBound(arrDatos, 1)
         
-        Session.StartTransaction "CO11N"
+        If huboErrorAnterior Then
+            Session.StartTransaction "CO11N"
+            huboErrorAnterior = False ' Reseteamos la bandera
+        End If
         
         With Session.findById("wnd[0]")
             .FindByName("AFRUD-AUFNR", "GuiCTextField").Text = CStr(arrDatos(i, cORDEN))
@@ -143,9 +149,17 @@ Sub AccesoSAP_Optimizado()
             tipoMsj = .findById("sbar").MessageType
             textoMsj = .findById("sbar").Text
             
-            ' Si es Error (E), Aborto (A) o Advertencia (W - como la tolerancia de tu imagen)
-            If tipoMsj = "E" Or tipoMsj = "A" Or tipoMsj = "W" Then
-                arrDatos(i, cESTATUS) = "ERROR/ADVERTENCIA"
+            ' Si es una Advertencia (W), intentamos presionar Enter para omitirla
+            If tipoMsj = "W" Then
+                .sendVKey 0
+                ' Volvemos a leer el mensaje para ver si pudimos saltarla
+                tipoMsj = .findById("sbar").MessageType
+                textoMsj = .findById("sbar").Text
+            End If
+
+            ' Si es Error (E) o Aborto (A) tras evaluar (o re-evaluar)
+            If tipoMsj = "E" Or tipoMsj = "A" Then
+                arrDatos(i, cESTATUS) = "ERROR"
                 arrDatos(i, cMENSAJE) = textoMsj
                 GoTo SiguienteFila ' Aborta esta fila y salta a la etiqueta de abajo
             End If
@@ -214,6 +228,10 @@ Sub AccesoSAP_Optimizado()
         End With
         
 SiguienteFila:
+        ' Si la fila terminó en algún error o advertencia que no guardó, marcamos la bandera
+        If arrDatos(i, cESTATUS) <> "OK" Then
+            huboErrorAnterior = True
+        End If
     Next i
     
     ' === Volcado de la matriz actualizada a Excel en un solo paso ===
@@ -230,6 +248,13 @@ SiguienteFila:
 ' === Subrutina para reactivar Excel SÍ algo falla de manera general y captura del error ===
 ManejadorErrores:
     
+    ' Guardamos la información procesada hasta el momento del error
+    If Not Tbl_DATOS Is Nothing Then
+        If IsArray(arrDatos) Then
+            Tbl_DATOS.DataBodyRange.Value = arrDatos
+        End If
+    End If
+
     RestaurarEntorno
     
     ' Evaluamos si el error fue provocado por el usuario presionando ESC (Error 18)
